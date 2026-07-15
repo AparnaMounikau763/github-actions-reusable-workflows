@@ -50,6 +50,15 @@ jobs:
             --cov-report=xml \
             -v
 
+      - name: Clean Python Cache
+        run: |
+          echo "===== Cleaning Python Cache ====="
+          find . -type d -name "__pycache__" -exec rm -rf {} +
+          find . -type f -name "*.pyc" -delete
+
+          echo "===== Remaining Repository Files ====="
+          ls -R
+
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
