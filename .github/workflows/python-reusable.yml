@@ -4,17 +4,19 @@ on:
   workflow_call:
     inputs:
       python_version:
+        description: "Python Version"
         required: true
         type: string
 
+    secrets:
+      SONAR_TOKEN:
+        required: true
+
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -25,7 +27,10 @@ jobs:
 
       - name: Show Repository Structure
         run: |
+          echo "===== Current Directory ====="
           pwd
+
+          echo "===== Repository Files ====="
           ls -R
 
       - name: Install Requirements
@@ -38,6 +43,14 @@ jobs:
           python -c "import app"
           python -c "from app import app"
 
-      - name: Run Tests
+      - name: Run Tests with Coverage
         run: |
-          python -m pytest tests -v
+          python -m pytest tests \
+            --cov=. \
+            --cov-report=xml \
+            -v
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
