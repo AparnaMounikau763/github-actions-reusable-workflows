@@ -23,8 +23,17 @@ on:
       DOCKER_PASSWORD:
         required: true
 
+      EC2_HOST:
+        required: true
+
+      EC2_USERNAME:
+        required: true
+
+      EC2_SSH_KEY:
+        required: true
+
 jobs:
-  build-test-sonar-docker:
+  build-test-deploy:
 
     runs-on: ubuntu-latest
 
@@ -38,29 +47,27 @@ jobs:
         with:
           python-version: ${{ inputs.python_version }}
 
-      - name: Show Repository Structure
+      - name: Verify Docker
         run: |
-          pwd
-          ls -R
+          docker --version
 
       - name: Install Requirements
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Verify Import
+      - name: Verify Application Import
         run: |
-          python -c "import app"
           python -c "from app import app"
 
-      - name: Run Tests with Coverage
+      - name: Run Unit Tests
         run: |
           python -m pytest tests \
             --cov=. \
             --cov-report=xml \
             -v
 
-      - name: Clean Python Cache
+      - name: Remove Python Cache
         run: |
           find . -type d -name "__pycache__" -exec rm -rf {} +
           find . -type f -name "*.pyc" -delete
@@ -85,3 +92,93 @@ jobs:
         run: |
           docker push \
             ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ github.sha }}
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+
+          script: |
+            set -e
+
+            IMAGE=${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ github.sha }}
+
+            echo "===== Checking Docker ====="
+
+            if ! command -v docker >/dev/null 2>&1; then
+
+              if command -v yum >/dev/null 2>&1; then
+                sudo yum install -y docker
+              else
+                sudo apt-get update
+                sudo apt-get install -y docker.io
+              fi
+
+              sudo systemctl enable docker
+              sudo systemctl start docker
+
+            fi
+
+            docker --version
+
+            echo "===== Docker Login ====="
+
+            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login \
+              -u "${{ secrets.DOCKER_USERNAME }}" \
+              --password-stdin
+
+            echo "===== Pull Image ====="
+
+            docker pull $IMAGE
+
+            echo "===== Remove Old Temp Container ====="
+
+            docker stop python-temp || true
+            docker rm python-temp || true
+
+            echo "===== Start Temporary Container ====="
+
+            docker run -d \
+              --name python-temp \
+              -p 5001:5000 \
+              $IMAGE
+
+            echo "Waiting..."
+
+            sleep 15
+
+            echo "===== Health Check ====="
+
+            if curl --fail http://localhost:5001/health
+            then
+
+              echo "Health Check Passed"
+
+              docker stop python-flask-app || true
+              docker rm python-flask-app || true
+
+              docker run -d \
+                --name python-flask-app \
+                --restart always \
+                -p 5000:5000 \
+                $IMAGE
+
+              docker stop python-temp
+              docker rm python-temp
+
+              echo "Deployment Successful"
+
+            else
+
+              echo "Deployment Failed"
+
+              docker logs python-temp
+
+              docker stop python-temp || true
+              docker rm python-temp || true
+
+              exit 1
+
+            fi
